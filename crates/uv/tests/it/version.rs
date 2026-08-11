@@ -1324,6 +1324,32 @@ requires-python = ">=3.12"
 }
 
 #[test]
+fn bump_unknown_component_fails() -> Result<()> {
+    let context = uv_test::test_context!("3.12");
+
+    let pyproject_toml = context.temp_dir.child("pyproject.toml");
+    pyproject_toml.write_str(
+        r#"
+[project]
+name = "myproject"
+version = "1.2.3"
+requires-python = ">=3.12"
+"#,
+    )?;
+
+    uv_snapshot!(context.filters(), context.version()
+        .arg("--bump").arg("foo"), @"
+    exit_code: 2 (failure)
+    ----- stderr -----
+    error: invalid value 'foo' for '--bump <BUMP[=VALUE]>'
+      [possible values: major, minor, patch, stable, alpha, beta, rc, post, dev]
+
+    For more information, try '--help'.
+    ");
+    Ok(())
+}
+
+#[test]
 fn bump_stable_with_value_fails() -> Result<()> {
     let context = uv_test::test_context!("3.12");
 
@@ -1342,6 +1368,10 @@ requires-python = ">=3.12"
     exit_code: 2 (failure)
     ----- stderr -----
     error: `--bump stable` does not accept a value
+
+    Usage: uv version [OPTIONS] [VALUE]
+
+    For more information, try '--help'.
     ");
     Ok(())
 }
@@ -1365,6 +1395,10 @@ requires-python = ">=3.12"
     exit_code: 2 (failure)
     ----- stderr -----
     error: `--bump` values cannot be empty
+
+    Usage: uv version [OPTIONS] [VALUE]
+
+    For more information, try '--help'.
     ");
     Ok(())
 }
@@ -1388,6 +1422,10 @@ requires-python = ">=3.12"
     exit_code: 2 (failure)
     ----- stderr -----
     error: invalid numeric value `foo` for `--bump dev`
+
+    Usage: uv version [OPTIONS] [VALUE]
+
+    For more information, try '--help'.
     ");
     Ok(())
 }
