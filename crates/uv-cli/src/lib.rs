@@ -7,7 +7,7 @@ use std::str::FromStr;
 use anyhow::{Result, anyhow};
 use clap::builder::styling::{AnsiColor, Effects, Style};
 use clap::builder::{PossibleValue, Styles, TypedValueParser, ValueParserFactory};
-use clap::error::ErrorKind;
+use clap::error::{ContextKind, ContextValue, ErrorKind};
 use clap::{Args, Parser, Subcommand};
 use clap::{ValueEnum, ValueHint};
 
@@ -756,7 +756,7 @@ impl Display for VersionBump {
 }
 
 impl FromStr for VersionBump {
-    type Err = String;
+    type Err = VersionBumpError;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
@@ -769,7 +769,27 @@ impl FromStr for VersionBump {
             "rc" => Ok(Self::Rc),
             "post" => Ok(Self::Post),
             "dev" => Ok(Self::Dev),
-            _ => Err(format!("invalid bump component `{value}`\n")),
+            _ => Err(VersionBumpError::UnknownComponent(value.to_string())),
+        }
+    }
+}
+
+/// An error that occurs when parsing a [`VersionBump`] or [`VersionBumpSpec`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VersionBumpError {
+    /// The bump component is not one of the known [`VersionBump`] variants.
+    UnknownComponent(String),
+    /// The bump component is known, but the value attached to it is not valid.
+    InvalidValue(String),
+}
+
+impl Display for VersionBumpError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnknownComponent(component) => {
+                write!(f, "invalid bump component `{component}`")
+            }
+            Self::InvalidValue(message) => message.fmt(f),
         }
     }
 }
@@ -790,7 +810,7 @@ impl Display for VersionBumpSpec {
 }
 
 impl FromStr for VersionBumpSpec {
-    type Err = String;
+    type Err = VersionBumpError;
 
     fn from_str(input: &str) -> Result<Self, Self::Err> {
         let (name, value) = match input.split_once('=') {
@@ -801,17 +821,22 @@ impl FromStr for VersionBumpSpec {
         let bump = name.parse::<VersionBump>()?;
 
         if bump == VersionBump::Stable && value.is_some() {
-            return Err("`--bump stable` does not accept a value".to_string());
+            return Err(VersionBumpError::InvalidValue(
+                "`--bump stable` does not accept a value".to_string(),
+            ));
         }
 
         let value = match value {
             Some("") => {
-                return Err("`--bump` values cannot be empty".to_string());
+                return Err(VersionBumpError::InvalidValue(
+                    "`--bump` values cannot be empty".to_string(),
+                ));
             }
-            Some(raw) => Some(
-                raw.parse::<u64>()
-                    .map_err(|_| format!("invalid numeric value `{raw}` for `--bump {name}`"))?,
-            ),
+            Some(raw) => Some(raw.parse::<u64>().map_err(|_| {
+                VersionBumpError::InvalidValue(format!(
+                    "invalid numeric value `{raw}` for `--bump {name}`"
+                ))
+            })?),
             None => None,
         };
 
@@ -835,19 +860,25 @@ impl TypedValueParser for VersionBumpSpecValueParser {
 
     fn parse_ref(
         &self,
-        _cmd: &clap::Command,
-        _arg: Option<&clap::Arg>,
+        cmd: &clap::Command,
+        arg: Option<&clap::Arg>,
         value: &std::ffi::OsStr,
     ) -> Result<Self::Value, clap::Error> {
         let raw = value.to_str().ok_or_else(|| {
-            clap::Error::raw(
+            cmd.clone().error(
                 ErrorKind::InvalidUtf8,
                 "`--bump` values must be valid UTF-8",
             )
         })?;
 
-        VersionBumpSpec::from_str(raw)
-            .map_err(|message| clap::Error::raw(ErrorKind::InvalidValue, message))
+        VersionBumpSpec::from_str(raw).map_err(|err| match err {
+            VersionBumpError::UnknownComponent(component) => {
+                invalid_bump_component_error(cmd, arg, &component)
+            }
+            VersionBumpError::InvalidValue(message) => {
+                cmd.clone().error(ErrorKind::ValueValidation, message)
+            }
+        })
     }
 
     fn possible_values(&self) -> Option<Box<dyn Iterator<Item = PossibleValue> + '_>> {
@@ -857,6 +888,38 @@ impl TypedValueParser for VersionBumpSpecValueParser {
                 .filter_map(ValueEnum::to_possible_value),
         ))
     }
+}
+
+/// Build the error clap emits for an invalid value of an enumerated argument.
+///
+/// [`VersionBumpSpec`] is parsed with a custom [`TypedValueParser`], so the error has to carry the
+/// context that clap's own parsers attach; otherwise, the message is rendered without styling, the
+/// possible values, or the trailing help.
+fn invalid_bump_component_error(
+    cmd: &clap::Command,
+    arg: Option<&clap::Arg>,
+    component: &str,
+) -> clap::Error {
+    let mut error = clap::Error::new(ErrorKind::InvalidValue).with_cmd(cmd);
+    error.insert(
+        ContextKind::InvalidArg,
+        ContextValue::String(arg.map_or_else(|| "...".to_string(), ToString::to_string)),
+    );
+    error.insert(
+        ContextKind::InvalidValue,
+        ContextValue::String(component.to_string()),
+    );
+    error.insert(
+        ContextKind::ValidValue,
+        ContextValue::Strings(
+            VersionBump::value_variants()
+                .iter()
+                .filter_map(ValueEnum::to_possible_value)
+                .map(|value| value.get_name().to_string())
+                .collect(),
+        ),
+    );
+    error
 }
 
 #[derive(Args)]
