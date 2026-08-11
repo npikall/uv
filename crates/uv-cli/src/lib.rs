@@ -769,7 +769,7 @@ impl FromStr for VersionBump {
             "rc" => Ok(Self::Rc),
             "post" => Ok(Self::Post),
             "dev" => Ok(Self::Dev),
-            _ => Err(format!("invalid bump component `{value}`")),
+            _ => Err(format!("invalid bump component `{value}`\n")),
         }
     }
 }
